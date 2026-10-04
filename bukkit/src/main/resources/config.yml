@@ -1,0 +1,20 @@
+# ==========================================================
+# MineStormParty - Configuration  |  Created by Muvixo
+# ==========================================================
+settings:
+  party-max-size: 8
+  invite-expire-seconds: 60
+  suppress-public-join-quit: false
+  allow-cross-server-invites: true
+  default-color: b
+
+formats:
+  member-join: "&bParty > &f%player% &bjoined the Server!"
+  member-quit: "&bParty > &f%player% &bleft the Server!"
+  party-chat: "&bParty > &f%player% &7» &f%message%"
+
+placeholders:
+  no-party: ""
+
+database:
+  file: "guilds.db"

@@ -1,0 +1,85 @@
+# ==========================================================
+# MineStormParty - Messages  |  Created by Muvixo
+# Aqua & White theme. Placeholders in braces: %x%
+# ==========================================================
+prefix: "&b&lMineStorm &f&lParty &8» &f"
+
+# Generic
+no-permission: "%prefix%&cYou don't have permission to do that."
+player-only: "&cOnly players can use this command."
+unknown-command: "%prefix%&cUnknown sub-command. Use &b/party help &cto see the list."
+invalid-usage: "%prefix%&cUsage: &f%usage%"
+reload-done: "%prefix%&aConfiguration and messages reloaded."
+data-saved: "%prefix%&aData saved."
+
+# Creator
+creator: "&b&lMineStorm &f&lParty &8» &fCreated by &bMuvixo"
+
+# Party lifecycle
+party-created: "%prefix%&aYou created a party! Use &b/party invite <player> &ato add members."
+already-in-party: "%prefix%&cYou are already in a party!"
+not-in-party: "%prefix%&cYou are not in a party!"
+party-not-found: "%prefix%&cThat party doesn't exist."
+party-full: "%prefix%&cThat party is full (%max% players)."
+party-disbanded: "%prefix%&cThe party was disbanded by %player%."
+party-disband-confirm: "%prefix%&eAre you sure? Type &c/party disband &eagain within 15 seconds to confirm."
+only-leader: "%prefix%&cOnly the Party Leader can do that."
+leader-cannot-leave: "%prefix%&cYou are the Party Leader! Use &f/party transfer <player> &cor &f/party disband&c."
+
+# Invite
+invite-sent: "%prefix%&aInvited %target% &eto your party!"
+invite-received: "%prefix%&b%player% &einvited you to their party! You have &b%seconds% &eseconds."
+invite-click: "&b&lCLICK HERE &eto join, or run &b/party accept %leader%"
+invite-hover: "&bClick to join %leader%'s party"
+invite-expired: "%prefix%&cYour invite from %leader% has expired."
+invite-already-pending: "%prefix%&cThat player already has a pending invite."
+cannot-invite-self: "%prefix%&cYou can't invite yourself."
+player-offline: "%prefix%&cThat player is not online."
+player-already-in-party: "%prefix%&cThat player is already in a party."
+invite-none: "%prefix%&cYou have no pending invites."
+invite-denied-to-leader: "%prefix%&c%player% &edenied your party invite."
+invite-denied: "%prefix%&eYou denied the invite."
+invite-accepted: "%prefix%&a%player% &ejoined the party!"
+invite-accepted-self: "%prefix%&aYou joined &b%leader%&a's party!"
+
+# Leave / kick / transfer
+leave-success: "%prefix%&eYou left the party."
+leave-broadcast: "%prefix%&f%player% &bleft the party."
+kick-success: "%prefix%&c%target% &ewas kicked from the party by %player%&c!"
+kick-self: "%prefix%&cYou can't kick yourself. Use /party leave."
+kick-lower-only: "%prefix%&cOnly the party leader can kick members."
+target-not-member: "%prefix%&cThat player is not in your party."
+transfer-success: "%prefix%&a%player% &etransferred leadership to &b%target%&e!"
+transfer-self: "%prefix%&cYou are already the Party Leader."
+
+# Color
+color-set: "%prefix%&eThe party color is now %code%%name%&e!"
+color-current: "%prefix%&eCurrent color: %code%%name%"
+
+# Chat
+chat-mode-on: "%prefix%&aParty chat mode enabled. Use &b/party chat &aagain to disable it."
+chat-mode-off: "%prefix%&cParty chat mode disabled. You talk in public chat again."
+chat-no-party: "%prefix%&cYou are no longer in a party - party chat mode disabled."
+
+# Info / List
+info-header: "&b&m------------------&f Party &b&m------------------"
+info-leader: "&bLeader: &f%leader%"
+info-members: "&bMembers: &f%count%&7/&f%max% &7(&a%online% online&7)"
+info-you: "&bYou are: &f%role%"
+info-color: "&bColor: %code%%name%"
+info-created: "&bCreated: &f%date%"
+list-header: "&b&m------------------&f &b%leader%'s Party &f&m------------------"
+list-entry: " &b• &f%name% &7(%role%)"
+
+# Admin
+admin-header: "&b&m------------------&f &b&lAdmin &f&m------------------"
+admin-reload: "%prefix%&aReloaded config & messages."
+admin-guild-created: "%prefix%&aCreated a party for %target%."
+admin-guild-deleted: "%prefix%&cDeleted the party of %target%&c."
+admin-guild-not-found: "%prefix%&cNo such party: %name%"
+admin-color-set: "%prefix%&aColor set to %code%%name%&a."
+admin-member-added: "%prefix%&aAdded %target% &ato %leader%&a's party."
+admin-member-removed: "%prefix%&cRemoved %target% &cfrom their party."
+admin-player-info: "%prefix%&f%player% &7-> party of &b%leader% &7(members: &f%count%&7)"
+admin-player-noguild: "%prefix%&f%player% &7is not in a party."
+admin-player-removed: "%prefix%&cRemoved %player% &cfrom their party."

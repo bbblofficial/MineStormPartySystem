@@ -1,0 +1,5 @@
+name: MineStormParty
+main: com.minestorm.party.bungee.MineStormPartyBungee
+version: ${project.version}
+author: Muvixo
+description: Cross-server Party System - Proxy Relay
