@@ -13,6 +13,7 @@ import org.bukkit.event.player.PlayerQuitEvent;
 public class PartyListener implements Listener {
 
     private final MineStormParty plugin;
+
     public PartyListener(MineStormParty plugin) { this.plugin = plugin; }
 
     private boolean suppress() {
@@ -21,33 +22,50 @@ public class PartyListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGH)
     public void onJoin(PlayerJoinEvent e) {
-        Player p = e.getPlayer();
-        Party party = plugin.getPartyManager().getParty(p.getUniqueId());
+        final Player p = e.getPlayer();
+        final Party party = plugin.getPartyManager().getParty(p.getUniqueId());
         if (party == null) return;
-        if (!p.getName().equals(party.getMemberName(p.getUniqueId()))) {
-            party.setMemberName(p.getUniqueId(), p.getName());
-            plugin.getPartyManager().save();
-        }
+
+        plugin.getPartyManager().syncName(p);
         if (suppress()) e.setJoinMessage(null);
-        String fmt = plugin.getConfig().getString("formats.member-join", "&bParty > &f%player% &bjoined the Server!");
-        plugin.broadcastExcept(party, Msg.color(fmt.replace("%player%", p.getName())), p.getUniqueId());
+
+        String fmt = plugin.getConfig().getString("formats.member-join", MineStormParty.DEFAULT_JOIN_FORMAT);
+        plugin.broadcastExcept(party, plugin.formatParty(fmt, party, p.getName()), p.getUniqueId());
+
+        // let members on other servers know (delayed: the client must have registered the channel)
+        Bukkit.getScheduler().runTaskLater(plugin, new Runnable() {
+            @Override public void run() {
+                plugin.getProxyBridge().sendNotice(party, "join", p.getName(), p.getUniqueId());
+            }
+        }, 20L);
     }
 
     @EventHandler(priority = EventPriority.HIGH)
     public void onQuit(PlayerQuitEvent e) {
-        Player p = e.getPlayer();
+        final Player p = e.getPlayer();
         plugin.getChatToggled().remove(p.getUniqueId());
-        Party party = plugin.getPartyManager().getParty(p.getUniqueId());
+        plugin.getPartyManager().clearInvites(p.getUniqueId());
+
+        final Party party = plugin.getPartyManager().getParty(p.getUniqueId());
         if (party == null) return;
         if (suppress()) e.setQuitMessage(null);
-        String fmt = plugin.getConfig().getString("formats.member-quit", "&bParty > &f%player% &bleft the Server!");
-        plugin.broadcastExcept(party, Msg.color(fmt.replace("%player%", p.getName())), p.getUniqueId());
+
+        String fmt = plugin.getConfig().getString("formats.member-quit", MineStormParty.DEFAULT_QUIT_FORMAT);
+        plugin.broadcastExcept(party, plugin.formatParty(fmt, party, p.getName()), p.getUniqueId());
+
+        // next tick: the quitting player is no longer a valid message carrier
+        Bukkit.getScheduler().runTask(plugin, new Runnable() {
+            @Override public void run() {
+                plugin.getProxyBridge().sendNotice(party, "quit", p.getName(), p.getUniqueId());
+            }
+        });
     }
 
     @EventHandler(priority = EventPriority.HIGH)
     public void onKick(PlayerKickEvent e) {
-        if (suppress() && plugin.getPartyManager().getParty(e.getPlayer().getUniqueId()) != null)
+        if (suppress() && plugin.getPartyManager().getParty(e.getPlayer().getUniqueId()) != null) {
             e.setLeaveMessage(null);
+        }
     }
 
     @EventHandler(priority = EventPriority.LOWEST)

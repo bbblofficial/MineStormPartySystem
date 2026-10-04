@@ -1,7 +1,7 @@
 name: MineStormParty
 version: ${project.version}
 main: com.minestorm.party.bukkit.MineStormParty
-api-version: 1.8
+api-version: 1.13
 author: Muvixo
 description: Cross-server Party System by Muvixo
 softdepend: [PlaceholderAPI]
@@ -9,12 +9,15 @@ commands:
   party:
     aliases: [p, minestormparty, msp]
     description: Party command
+    usage: /<command> help
   pc:
     aliases: [pchat, partychat]
     description: Party chat
+    usage: /<command> <message>
   mspa:
     aliases: [minestormpartyadmin, mspadmin]
     description: MineStormParty admin command
+    usage: /<command> help
 permissions:
   minestormparty.admin:
     description: Full admin access
@@ -22,6 +25,7 @@ permissions:
     children:
       minestormparty.admin.reload: true
       minestormparty.admin.save: true
+      minestormparty.admin.sync: true
       minestormparty.admin.party.create: true
       minestormparty.admin.party.delete: true
       minestormparty.admin.party.color: true
@@ -31,6 +35,7 @@ permissions:
       minestormparty.admin.player.remove: true
   minestormparty.admin.reload: { default: op }
   minestormparty.admin.save: { default: op }
+  minestormparty.admin.sync: { default: op }
   minestormparty.admin.party.create: { default: op }
   minestormparty.admin.party.delete: { default: op }
   minestormparty.admin.party.color: { default: op }
@@ -39,6 +44,4 @@ permissions:
   minestormparty.admin.player.info: { default: op }
   minestormparty.admin.player.remove: { default: op }
   minestormparty.create: { default: true }
-  minestormparty.invite: { default: true }
-  minestormparty.color: { default: true }
   minestormparty.chat.color: { default: op }

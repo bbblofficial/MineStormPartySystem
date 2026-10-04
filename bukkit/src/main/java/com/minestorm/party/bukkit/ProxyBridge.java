@@ -3,128 +3,204 @@ package com.minestorm.party.bukkit;
 import com.minestorm.party.common.Net;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
+import org.bukkit.plugin.messaging.Messenger;
 import org.bukkit.plugin.messaging.PluginMessageListener;
 
-import java.io.ByteArrayOutputStream;
-import java.io.DataOutputStream;
 import java.util.UUID;
 
 /**
- * Sends/receives cross-server party messages through the proxy.
- * Message format (UTF strings joined by Net.SEP):
- *   TYPE | k1 | v1 | k2 | v2 | ...
+ * Sends / receives cross-server party messages through the proxy relay.
+ * Wire format: see {@link Net}. Incoming messages are only processed when
+ * settings.cross-server is true (otherwise clients could forge them).
  */
 public class ProxyBridge implements PluginMessageListener {
 
     private final MineStormParty plugin;
+    private boolean enabled;
 
     public ProxyBridge(MineStormParty plugin) { this.plugin = plugin; }
 
-    @Override
-    public void onPluginMessageReceived(String channel, Player player, byte[] message) {
-        if (!Net.CHANNEL.equals(channel)) return;
+    public void enable() {
         try {
-            String raw = new String(message, "UTF-8");
-            String[] parts = raw.split(Net.SEP, -1);
-            if (parts.length == 0) return;
-            String type = parts[0];
-
-            if (Net.INVITE.equals(type)) {
-                // INVITE|leaderUUID|leaderName|targetUUID|targetName|color|seconds
-                UUID targetUUID = UUID.fromString(parts[3]);
-                Player target = Bukkit.getPlayer(targetUUID);
-                if (target == null) return;
-                String leaderName = parts[2];
-                String leaderU = parts[1];
-                String seconds = parts.length > 6 ? parts[6] : "60";
-                plugin.getMessages().send(target, "invite-received",
-                        "player", "&b" + leaderName, "seconds", seconds);
-                final String acceptCmd = "/party accept " + leaderName;
-                plugin.getMessages().sendRaw(target,
-                        plugin.getMessages().raw("invite-click").replace("%leader%", leaderName));
-                // Persist locally so /party accept works even before the leader tells us
-                try {
-                    UUID leaderUUID = UUID.fromString(leaderU);
-                    plugin.getPartyManager().addInvite(leaderUUID, targetUUID, target.getName(),
-                            Long.parseLong(seconds) * 1000L);
-                } catch (Exception ignored) {}
-            } else if (Net.INVITE_ACCEPT.equals(type)) {
-                // INVITE_ACCEPT|leaderUUID|accepterUUID|accepterName
-                UUID leaderUUID = UUID.fromString(parts[1]);
-                Party p = plugin.getPartyManager().getByLeader(leaderUUID);
-                if (p == null) return;
-                UUID u = UUID.fromString(parts[2]);
-                if (p.isMember(u)) return;
-                plugin.getPartyManager().addMember(p, u, parts[3]);
-                plugin.getPartyManager().save();
-                plugin.broadcast(p, plugin.getMessages().format("invite-accepted", "player", "&b" + parts[3]));
-            } else if (Net.INVITE_DENY.equals(type)) {
-                UUID leaderUUID = UUID.fromString(parts[1]);
-                Party p = plugin.getPartyManager().getByLeader(leaderUUID);
-                if (p == null) return;
-                plugin.broadcast(p, plugin.getMessages().format("invite-denied-to-leader",
-                        "player", "&b" + parts[3]));
-            } else if (Net.CHAT.equals(type)) {
-                // CHAT|leaderUUID|senderName|message
-                UUID leaderUUID = UUID.fromString(parts[1]);
-                Party p = plugin.getPartyManager().getByLeader(leaderUUID);
-                if (p == null) return;
-                String fmt = plugin.getConfig().getString("formats.party-chat",
-                        "&bParty > &f%player% &7» &f%message%");
-                String out = Msg.color(fmt.replace("%player%", parts[2])
-                                          .replace("%leader%", p.getLeaderName()))
-                                .replace("%message%", parts[3]);
-                plugin.broadcast(p, out);
-            } else if (Net.SYNC_ADD.equals(type)) {
-                UUID leaderUUID = UUID.fromString(parts[1]);
-                UUID u = UUID.fromString(parts[3]);
-                Party p = plugin.getPartyManager().getByLeader(leaderUUID);
-                if (p != null && !p.isMember(u))
-                    plugin.getPartyManager().addMember(p, u, parts[4]);
-            } else if (Net.SYNC_REMOVE.equals(type)) {
-                UUID leaderUUID = UUID.fromString(parts[1]);
-                UUID u = UUID.fromString(parts[3]);
-                Party p = plugin.getPartyManager().getByLeader(leaderUUID);
-                if (p != null) plugin.getPartyManager().removeMember(p, u);
-            } else if (Net.SYNC_DISBAND.equals(type)) {
-                UUID leaderUUID = UUID.fromString(parts[1]);
-                Party p = plugin.getPartyManager().getByLeader(leaderUUID);
-                if (p != null) plugin.getPartyManager().disband(p);
-            }
+            Messenger m = plugin.getServer().getMessenger();
+            m.registerOutgoingPluginChannel(plugin, Net.CHANNEL);
+            m.registerIncomingPluginChannel(plugin, Net.CHANNEL, this);
+            enabled = true;
         } catch (Throwable t) {
-            plugin.getLogger().warning("Proxy message parse error: " + t.getMessage());
+            enabled = false;
+            plugin.getLogger().warning("Plugin messaging unavailable: " + t.getMessage());
         }
     }
 
-    public void sendInvite(Party party, Player target, long seconds) {
-        send(Net.INVITE,
-                party.getLeader().toString(), party.getLeaderName(),
-                target.getUniqueId().toString(), target.getName(),
-                String.valueOf(party.getColor()), String.valueOf(seconds));
+    public boolean isEnabled() { return enabled; }
+
+    // ------------------------------------------------------------------
+    // outgoing
+    // ------------------------------------------------------------------
+    public void sendCreate(Party p) {
+        send(Net.P_CREATE, p.getId().toString(), p.getLeader().toString(), p.getLeaderName(),
+                String.valueOf(p.getColor()), String.valueOf(p.getCreated()));
     }
-    public void sendAccept(UUID leader, UUID accepter, String accepterName) {
-        send(Net.INVITE_ACCEPT, leader.toString(), accepter.toString(), accepterName);
+
+    public void sendAdd(Party p, UUID uuid, String name) {
+        send(Net.P_ADD, p.getId().toString(), uuid.toString(), name);
     }
-    public void sendDeny(UUID leader, UUID denier, String denierName) {
-        send(Net.INVITE_DENY, leader.toString(), denier.toString(), denierName);
+
+    public void sendRemove(Party p, UUID uuid, String name, String reason, String actor) {
+        send(Net.P_REMOVE, p.getId().toString(), uuid.toString(), name, reason, actor);
     }
-    public void sendChat(UUID leader, String senderName, String message) {
-        send(Net.CHAT, leader.toString(), senderName, message);
+
+    public void sendLeader(Party p, String oldLeaderName) {
+        send(Net.P_LEADER, p.getId().toString(), p.getLeader().toString(), p.getLeaderName(), oldLeaderName);
+    }
+
+    public void sendColor(Party p) {
+        send(Net.P_COLOR, p.getId().toString(), String.valueOf(p.getColor()));
+    }
+
+    public void sendDisband(UUID partyId, String actor) {
+        send(Net.P_DISBAND, partyId.toString(), actor);
+    }
+
+    public void sendChat(Party p, String sender, String message) {
+        send(Net.CHAT, p.getId().toString(), sender, message);
+    }
+
+    public void sendNotice(Party p, String key, String name, UUID except) {
+        send(Net.NOTICE, p.getId().toString(), key, name, except == null ? "" : except.toString());
+    }
+
+    public void sendInviteRequest(Party p, String targetName, long seconds) {
+        send(Net.INVITE_REQ, p.getId().toString(), p.getLeader().toString(), p.getLeaderName(),
+                targetName, String.valueOf(seconds), String.valueOf(p.getColor()), p.membersCsv());
+    }
+
+    public void sendInviteDeny(UUID leader, String denierName) {
+        send(Net.INVITE_DENY, leader.toString(), denierName);
+    }
+
+    /** Re-broadcasts every local party (used by /mspa sync). Returns the party count. */
+    public int syncAll() {
+        int n = 0;
+        for (Party p : plugin.getPartyManager().all()) {
+            sendCreate(p);
+            for (UUID u : p.getMembers()) {
+                if (!p.isLeader(u)) sendAdd(p, u, p.getMemberName(u));
+            }
+            n++;
+        }
+        return n;
     }
 
     private void send(String type, String... args) {
+        if (!enabled) return;
+        Player carrier = null;
+        for (Player p : Bukkit.getOnlinePlayers()) { carrier = p; break; }
+        if (carrier == null) return; // plugin messages need a player connection
         try {
-            StringBuilder sb = new StringBuilder(type);
-            for (String a : args) { sb.append(Net.SEP).append(a == null ? "" : a); }
-            ByteArrayOutputStream bout = new ByteArrayOutputStream();
-            DataOutputStream out = new DataOutputStream(bout);
-            out.writeUTF(sb.toString());
-            out.close();
-            // Send via the first available player (Bungee forwarding).
-            Player carrier = null;
-            for (Player p : Bukkit.getOnlinePlayers()) { carrier = p; break; }
-            if (carrier == null) return;
-            carrier.sendPluginMessage(plugin, "minestormparty:main", bout.toByteArray());
-        } catch (Throwable ignored) {}
+            carrier.sendPluginMessage(plugin, Net.CHANNEL, Net.encode(type, args));
+        } catch (Throwable t) {
+            plugin.getLogger().fine("Plugin message failed: " + t.getMessage());
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // incoming
+    // ------------------------------------------------------------------
+    @Override
+    public void onPluginMessageReceived(String channel, Player player, byte[] message) {
+        if (!enabled || !Net.CHANNEL.equals(channel)) return;
+        try {
+            handle(Net.decode(message));
+        } catch (Throwable t) {
+            plugin.getLogger().warning("Bad proxy message: " + t);
+        }
+    }
+
+    private static UUID uuid(String s) { return UUID.fromString(s); }
+
+    private void handle(String[] p) {
+        if (p.length == 0) return;
+        PartyManager pm = plugin.getPartyManager();
+        Messages m = plugin.getMessages();
+        String type = p[0];
+
+        if (Net.P_CREATE.equals(type) && p.length >= 6) {
+            pm.remoteCreate(uuid(p[1]), uuid(p[2]), p[3], p[4].charAt(0), Long.parseLong(p[5]));
+
+        } else if (Net.P_ADD.equals(type) && p.length >= 4) {
+            Party party = pm.get(uuid(p[1]));
+            if (party == null) return;
+            UUID u = uuid(p[2]);
+            if (party.isMember(u)) return;
+            pm.remoteAdd(party, u, p[3]);
+            plugin.broadcastExcept(party, m.format("invite-accepted", "player", p[3]), u);
+
+        } else if (Net.P_REMOVE.equals(type) && p.length >= 6) {
+            Party party = pm.get(uuid(p[1]));
+            if (party == null) return;
+            UUID u = uuid(p[2]);
+            if (!party.isMember(u) || party.isLeader(u)) return;
+            if ("kick".equals(p[4])) {
+                plugin.broadcast(party, m.format("kick-success", "target", p[3], "player", p[5]));
+            } else {
+                plugin.broadcastExcept(party, m.format("leave-broadcast", "player", p[3]), u);
+            }
+            pm.remoteRemove(party, u);
+
+        } else if (Net.P_LEADER.equals(type) && p.length >= 5) {
+            Party party = pm.get(uuid(p[1]));
+            if (party == null) return;
+            plugin.broadcast(party, m.format("transfer-success", "player", p[4], "target", p[3]));
+            pm.remoteLeader(party, uuid(p[2]), p[3]);
+
+        } else if (Net.P_COLOR.equals(type) && p.length >= 3) {
+            Party party = pm.get(uuid(p[1]));
+            if (party != null && !p[2].isEmpty()) pm.remoteColor(party, p[2].charAt(0));
+
+        } else if (Net.P_DISBAND.equals(type) && p.length >= 3) {
+            Party party = pm.get(uuid(p[1]));
+            if (party == null) return;
+            plugin.broadcast(party, m.format("party-disbanded", "player", p[2]));
+            pm.remoteDisband(party);
+
+        } else if (Net.CHAT.equals(type) && p.length >= 4) {
+            Party party = pm.get(uuid(p[1]));
+            if (party != null) plugin.broadcast(party, plugin.formatChat(party, p[2], p[3]));
+
+        } else if (Net.NOTICE.equals(type) && p.length >= 5) {
+            Party party = pm.get(uuid(p[1]));
+            if (party == null) return;
+            boolean join = "join".equals(p[2]);
+            String fmt = plugin.getConfig().getString(join ? "formats.member-join" : "formats.member-quit",
+                    join ? MineStormParty.DEFAULT_JOIN_FORMAT : MineStormParty.DEFAULT_QUIT_FORMAT);
+            UUID except = p[4].isEmpty() ? null : uuid(p[4]);
+            plugin.broadcastExcept(party, plugin.formatParty(fmt, party, p[3]), except);
+
+        } else if (Net.INVITE.equals(type) && p.length >= 9) {
+            UUID targetId = uuid(p[4]);
+            Player target = Bukkit.getPlayer(targetId);
+            if (target == null) return;
+            if (pm.getParty(targetId) != null) {
+                send(Net.INVITE_BUSY, p[2], target.getName());
+                return;
+            }
+            long expires = System.currentTimeMillis() + Long.parseLong(p[6]) * 1000L;
+            Invite inv = new Invite(uuid(p[1]), uuid(p[2]), p[3], expires, p[7].charAt(0), p[8]);
+            pm.addInvite(targetId, inv);
+            plugin.notifyInvite(target, inv);
+
+        } else if (Net.INVITE_DENY.equals(type) && p.length >= 3) {
+            Player leader = Bukkit.getPlayer(uuid(p[1]));
+            if (leader != null) m.send(leader, "invite-denied-to-leader", "player", p[2]);
+
+        } else if (Net.INVITE_FAIL.equals(type) && p.length >= 3) {
+            Player leader = Bukkit.getPlayer(uuid(p[1]));
+            if (leader != null) m.send(leader, "player-offline");
+
+        } else if (Net.INVITE_BUSY.equals(type) && p.length >= 3) {
+            Player leader = Bukkit.getPlayer(uuid(p[1]));
+            if (leader != null) m.send(leader, "player-already-in-party");
+        }
     }
 }

@@ -7,44 +7,41 @@ import com.velocitypowered.api.event.connection.PluginMessageEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
 import com.velocitypowered.api.plugin.Plugin;
-import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.ServerConnection;
 import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
+import com.velocitypowered.api.proxy.server.RegisteredServer;
 import org.slf4j.Logger;
 
-import java.nio.file.Path;
 import java.util.Optional;
 import java.util.UUID;
 
 /**
- * MineStormParty proxy relay (Velocity).
- * Forwards party messages to whichever backend the target is on.
+ * MineStormParty proxy relay (Velocity) - stateless.
+ * Only trusts messages coming from backend servers; anything a client sends on
+ * the channel is dropped, so players cannot forge party packets.
  *
  * Created by Muvixo.
  */
 @Plugin(
         id = "minestormparty",
         name = "MineStormParty",
-        version = "1.0.0",
+        version = "1.1.0",
         description = "Cross-server Party System - Proxy Relay",
         authors = {"Muvixo"}
 )
 public class MineStormPartyVelocity {
 
-    private static final MinecraftChannelIdentifier CHANNEL =
-            MinecraftChannelIdentifier.from(Net.CHANNEL);
+    private static final MinecraftChannelIdentifier CHANNEL = MinecraftChannelIdentifier.from(Net.CHANNEL);
 
     private final ProxyServer server;
     private final Logger logger;
-    private final Path dataDirectory;
 
     @Inject
-    public MineStormPartyVelocity(ProxyServer server, Logger logger, @DataDirectory Path dataDirectory) {
+    public MineStormPartyVelocity(ProxyServer server, Logger logger) {
         this.server = server;
         this.logger = logger;
-        this.dataDirectory = dataDirectory;
     }
 
     @Subscribe
@@ -61,44 +58,44 @@ public class MineStormPartyVelocity {
     @Subscribe
     public void onPluginMessage(PluginMessageEvent e) {
         if (!CHANNEL.equals(e.getIdentifier())) return;
-        if (!(e.getSource() instanceof ServerConnection)) return;
+        e.setResult(PluginMessageEvent.ForwardResult.handled()); // never forward our channel
 
-        try {
-            String raw = new String(e.getData(), "UTF-8");
-            String[] parts = raw.split(Net.SEP, -1);
-            if (parts.length == 0) return;
-            String type = parts[0];
+        if (!(e.getSource() instanceof ServerConnection)) return; // ignore clients
+        ServerConnection origin = (ServerConnection) e.getSource();
+        byte[] data = e.getData();
 
-            String targetUuid = null;
-            if (Net.INVITE.equals(type) && parts.length > 3) targetUuid = parts[3];
-            else if (Net.INVITE_ACCEPT.equals(type) && parts.length > 2) targetUuid = parts[1];
-            else if (Net.INVITE_DENY.equals(type) && parts.length > 2) targetUuid = parts[1];
-            else if (Net.CHAT.equals(type) || Net.SYNC_ADD.equals(type)
-                    || Net.SYNC_REMOVE.equals(type) || Net.SYNC_DISBAND.equals(type)) {
-                broadcastToAll(e.getData(), e.getSource());
-                e.setResult(PluginMessageEvent.ForwardResult.handled());
-                return;
+        String[] parts;
+        try { parts = Net.decode(data); } catch (Exception ex) { return; }
+        if (parts.length == 0) return;
+        String type = parts[0];
+
+        if (Net.isBroadcast(type)) {
+            String originName = origin.getServerInfo().getName();
+            for (RegisteredServer rs : server.getAllServers()) {
+                if (rs.getServerInfo().getName().equals(originName)) continue;
+                rs.sendPluginMessage(CHANNEL, data);
             }
 
-            if (targetUuid != null) {
-                try {
-                    Optional<Player> tp = server.getPlayer(UUID.fromString(targetUuid));
-                    if (tp.isPresent() && tp.get().getCurrentServer().isPresent()) {
-                        tp.get().getCurrentServer().get().sendPluginMessage(CHANNEL, e.getData());
-                        e.setResult(PluginMessageEvent.ForwardResult.handled());
-                        return;
-                    }
-                } catch (Exception ignored) {}
+        } else if (Net.INVITE_REQ.equals(type) && parts.length >= 8) {
+            Optional<Player> target = server.getPlayer(parts[4]);
+            if (target.isPresent() && target.get().getCurrentServer().isPresent()) {
+                target.get().getCurrentServer().get().sendPluginMessage(CHANNEL,
+                        Net.toInvite(parts, target.get().getUniqueId().toString(), target.get().getUsername()));
+            } else {
+                routeToPlayer(parts[2], Net.encode(Net.INVITE_FAIL, parts[2], parts[4]));
             }
-            broadcastToAll(e.getData(), e.getSource());
-        } catch (Exception ignored) {}
 
-        e.setResult(PluginMessageEvent.ForwardResult.handled());
+        } else if (Net.isPlayerRouted(type) && parts.length >= 2) {
+            routeToPlayer(parts[1], data);
+        }
     }
 
-    private void broadcastToAll(byte[] data, Object except) {
-        for (com.velocitypowered.api.proxy.server.RegisteredServer sv : server.getAllServers()) {
-            try { sv.sendPluginMessage(CHANNEL, data); } catch (Exception ignored) {}
-        }
+    private void routeToPlayer(String uuid, byte[] data) {
+        try {
+            Optional<Player> pl = server.getPlayer(UUID.fromString(uuid));
+            if (pl.isPresent() && pl.get().getCurrentServer().isPresent()) {
+                pl.get().getCurrentServer().get().sendPluginMessage(CHANNEL, data);
+            }
+        } catch (IllegalArgumentException ignored) { }
     }
 }

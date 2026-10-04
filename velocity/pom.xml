@@ -4,7 +4,7 @@
   <parent>
     <groupId>com.minestorm.party</groupId>
     <artifactId>minestormparty-parent</artifactId>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
   </parent>
   <artifactId>minestormparty-velocity</artifactId>
   <name>MineStormParty-Velocity</name>
@@ -23,19 +23,46 @@
     <dependency>
       <groupId>com.velocitypowered</groupId>
       <artifactId>velocity-api</artifactId>
-      <version>3.3.0-SNAPSHOT</version>
+      <version>${velocity.version}</version>
       <scope>provided</scope>
     </dependency>
   </dependencies>
 
-  <repositories>
-    <repository>
-      <id>papermc</id>
-      <url>https://repo.papermc.io/repository/maven-public/</url>
-    </repository>
-  </repositories>
-
   <build>
     <finalName>MineStormParty-Velocity-${project.version}</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <!-- generates velocity-plugin.json from the @Plugin annotation -->
+          <annotationProcessorPaths>
+            <path>
+              <groupId>com.velocitypowered</groupId>
+              <artifactId>velocity-api</artifactId>
+              <version>${velocity.version}</version>
+            </path>
+          </annotationProcessorPaths>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals><goal>shade</goal></goals>
+            <configuration>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
+              <artifactSet>
+                <includes>
+                  <include>com.minestorm.party:minestormparty-common</include>
+                </includes>
+              </artifactSet>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
   </build>
 </project>

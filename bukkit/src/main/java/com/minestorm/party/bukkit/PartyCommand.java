@@ -1,9 +1,5 @@
 package com.minestorm.party.bukkit;
 
-import net.md_5.bungee.api.chat.BaseComponent;
-import net.md_5.bungee.api.chat.ClickEvent;
-import net.md_5.bungee.api.chat.HoverEvent;
-import net.md_5.bungee.api.chat.TextComponent;
 import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -25,29 +21,23 @@ import java.util.UUID;
 public class PartyCommand implements CommandExecutor, TabCompleter {
 
     private static final List<String> SUBS = Arrays.asList(
-            "create","invite","accept","deny","leave","disband","kick","transfer",
-            "list","chat","color","creator","help");
-
-    private static final String[] CODES = {"0","1","2","3","4","5","6","7","8","9","a","b","c","d","e","f"};
-    private static final String[] NAMES = {"Black","Dark Blue","Dark Green","Dark Aqua","Dark Red","Dark Purple",
-            "Gold","Gray","Dark Gray","Blue","Green","Aqua","Red","Light Purple","Yellow","White"};
+            "create", "invite", "accept", "deny", "leave", "disband", "kick", "transfer",
+            "list", "info", "chat", "color", "creator", "help");
 
     private final MineStormParty plugin;
-    private final PartyManager pm;
     private final Map<UUID, Long> disbandConfirm = new HashMap<UUID, Long>();
 
-    public PartyCommand(MineStormParty plugin) {
-        this.plugin = plugin;
-        this.pm = plugin.getPartyManager();
-    }
+    public PartyCommand(MineStormParty plugin) { this.plugin = plugin; }
+
+    private PartyManager pm() { return plugin.getPartyManager(); }
+    private Messages msg() { return plugin.getMessages(); }
 
     @Override
     public boolean onCommand(CommandSender sender, Command cmd, String label, String[] args) {
-        if (!(sender instanceof Player)) { sender.sendMessage(plugin.getMessages().raw("player-only")); return true; }
+        if (!(sender instanceof Player)) { sender.sendMessage(msg().raw("player-only")); return true; }
         Player p = (Player) sender;
 
         if (cmd.getName().equalsIgnoreCase("pc")) { chat(p, args, 0); return true; }
-
         if (args.length == 0) { help(p); return true; }
 
         String sub = args[0].toLowerCase();
@@ -60,45 +50,39 @@ public class PartyCommand implements CommandExecutor, TabCompleter {
         else if (sub.equals("kick")) kick(p, args);
         else if (sub.equals("transfer")) transfer(p, args);
         else if (sub.equals("list") || sub.equals("members")) list(p);
+        else if (sub.equals("info")) info(p);
         else if (sub.equals("chat") || sub.equals("c")) chat(p, args, 1);
         else if (sub.equals("color") || sub.equals("colour")) color(p, args);
-        else if (sub.equals("creator")) p.sendMessage(plugin.getMessages().raw("creator"));
+        else if (sub.equals("creator")) p.sendMessage(msg().raw("creator"));
         else if (sub.equals("help")) help(p);
-        else plugin.getMessages().send(p, "unknown-command");
+        else msg().send(p, "unknown-command");
         return true;
     }
 
     private Party need(Player p) {
-        Party party = pm.getParty(p.getUniqueId());
-        if (party == null) plugin.getMessages().send(p, "not-in-party");
+        Party party = pm().getParty(p.getUniqueId());
+        if (party == null) msg().send(p, "not-in-party");
         return party;
     }
 
-    private long ttl() { return plugin.getConfig().getInt("settings.invite-expire-seconds", 60) * 1000L; }
-    private int maxSize() { return plugin.getConfig().getInt("settings.party-max-size", 8); }
-
-    private void clickable(Player to, String text, String command, String hover) {
-        TextComponent c = new TextComponent(Msg.color(text));
-        c.setClickEvent(new ClickEvent(ClickEvent.Action.RUN_COMMAND, command));
-        c.setHoverEvent(new HoverEvent(HoverEvent.Action.SHOW_TEXT,
-                new BaseComponent[]{ new TextComponent(Msg.color(hover)) }));
-        to.spigot().sendMessage((BaseComponent) c);
-    }
+    private long ttlMs() { return Math.max(5, plugin.getConfig().getInt("settings.invite-expire-seconds", 60)) * 1000L; }
+    private int maxSize() { return Math.max(2, plugin.getConfig().getInt("settings.party-max-size", 8)); }
 
     private void help(Player p) {
         p.sendMessage(Msg.color("&b&m------------- &f&lMineStorm &b&lParty &b&m-------------"));
         String[][] h = {
             {"create", "Create a party"},
-            {"invite <player>", "Invite a player"},
-            {"accept <player>", "Accept an invite"},
-            {"deny <player>", "Deny an invite"},
+            {"invite <player>", "Invite a player (any server)"},
+            {"accept <leader>", "Accept an invite"},
+            {"deny <leader>", "Deny an invite"},
             {"leave", "Leave your party"},
             {"disband", "Disband your party (Leader)"},
             {"kick <player>", "Kick a member (Leader)"},
             {"transfer <player>", "Give leadership (Leader)"},
             {"list", "List party members"},
+            {"info", "Show party information"},
             {"chat <msg>", "Party chat (no msg = toggle)"},
-            {"color <0-f>", "Set party chat color (Leader)"},
+            {"color <0-f>", "Set party color (Leader)"},
             {"creator", "Show plugin author"}
         };
         for (String[] x : h) p.sendMessage(Msg.color("&b/party " + x[0] + " &7- &f" + x[1]));
@@ -107,157 +91,180 @@ public class PartyCommand implements CommandExecutor, TabCompleter {
     }
 
     private void create(Player p) {
-        Messages m = plugin.getMessages();
-        if (!p.hasPermission("minestormparty.create")) { m.send(p, "no-permission"); return; }
-        if (pm.getParty(p.getUniqueId()) != null) { m.send(p, "already-in-party"); return; }
-        pm.createParty(p);
-        pm.save();
-        m.send(p, "party-created");
+        if (!p.hasPermission("minestormparty.create")) { msg().send(p, "no-permission"); return; }
+        if (pm().getParty(p.getUniqueId()) != null) { msg().send(p, "already-in-party"); return; }
+        pm().create(p);
+        msg().send(p, "party-created");
     }
 
     private void invite(Player p, String[] a) {
-        Messages m = plugin.getMessages();
-        Party party = need(p); if (party == null) return;
-        if (!party.isLeader(p.getUniqueId())) { m.send(p, "only-leader"); return; }
+        Messages m = msg();
         if (a.length < 2) { m.send(p, "invalid-usage", "usage", "/party invite <player>"); return; }
-        Player t = Bukkit.getPlayerExact(a[1]);
-        if (t == null) { m.send(p, "player-offline"); return; }
-        if (t.equals(p)) { m.send(p, "cannot-invite-self"); return; }
-        if (pm.getParty(t.getUniqueId()) != null) { m.send(p, "player-already-in-party"); return; }
-        if (party.size() >= maxSize()) { m.send(p, "party-full", "max", maxSize()); return; }
-        if (pm.hasInvite(party.getLeader(), t.getUniqueId())) { m.send(p, "invite-already-pending"); return; }
 
-        pm.addInvite(party.getLeader(), t.getUniqueId(), t.getName(), ttl());
-        m.send(p, "invite-sent", "target", "&b" + t.getName());
+        Party party = pm().getParty(p.getUniqueId());
+        if (party != null && !party.isLeader(p.getUniqueId())) { m.send(p, "only-leader"); return; }
+        if (party == null) {
+            if (!plugin.getConfig().getBoolean("settings.auto-create-on-invite", true)) {
+                m.send(p, "not-in-party"); return;
+            }
+            if (!p.hasPermission("minestormparty.create")) { m.send(p, "no-permission"); return; }
+        }
 
-        // deliver on this server
-        m.send(t, "invite-received", "player", "&b" + p.getName(), "seconds", ttl() / 1000L);
-        clickable(t, m.raw("invite-click").replace("%leader%", p.getName()),
-                "/party accept " + p.getName(),
-                m.raw("invite-hover").replace("%leader%", p.getName()));
+        String name = a[1];
+        if (name.equalsIgnoreCase(p.getName())) { m.send(p, "cannot-invite-self"); return; }
 
-        // cross-server delivery (harmless if target is local; the receiver checks)
-        plugin.getProxyBridge().sendInvite(party, t, ttl() / 1000L);
+        Player target = Bukkit.getPlayerExact(name);
+        boolean remote = false;
+        if (target != null) {
+            if (pm().getParty(target.getUniqueId()) != null) { m.send(p, "player-already-in-party"); return; }
+        } else if (plugin.getProxyBridge().isEnabled()) {
+            remote = true; // the proxy resolves the name; failures come back as a message
+        } else {
+            m.send(p, "player-offline"); return;
+        }
+
+        if (party != null) {
+            if (party.size() >= maxSize()) { m.send(p, "party-full", "max", maxSize()); return; }
+            if (pm().hasSent(party.getId(), name)) { m.send(p, "invite-already-pending"); return; }
+        } else {
+            party = pm().create(p);
+            m.send(p, "party-created");
+        }
+
+        pm().markSent(party.getId(), name, ttlMs());
+        if (remote) {
+            plugin.getProxyBridge().sendInviteRequest(party, name, ttlMs() / 1000L);
+            m.send(p, "invite-sent", "target", name);
+        } else {
+            Invite inv = new Invite(party.getId(), p.getUniqueId(), p.getName(),
+                    System.currentTimeMillis() + ttlMs(), party.getColor(), party.membersCsv());
+            pm().addInvite(target.getUniqueId(), inv);
+            m.send(p, "invite-sent", "target", target.getName());
+            plugin.notifyInvite(target, inv);
+        }
     }
 
     private void accept(Player p, String[] a) {
-        Messages m = plugin.getMessages();
+        Messages m = msg();
         if (a.length < 2) { m.send(p, "invalid-usage", "usage", "/party accept <leader>"); return; }
-        if (pm.getParty(p.getUniqueId()) != null) { m.send(p, "already-in-party"); return; }
-        Player leader = Bukkit.getPlayerExact(a[1]);
-        UUID leaderUUID = leader != null ? leader.getUniqueId() : null;
-        // fall back to scanning stored invites for name match
-        if (leaderUUID == null) {
-            for (Party pt : pm.all())
-                if (pt.getLeaderName().equalsIgnoreCase(a[1])) { leaderUUID = pt.getLeader(); break; }
+        if (pm().getParty(p.getUniqueId()) != null) { m.send(p, "already-in-party"); return; }
+
+        Invite inv = pm().findInvite(p.getUniqueId(), a[1]);
+        if (inv == null) { m.send(p, "invite-none"); return; }
+
+        Party party = pm().get(inv.partyId);
+        if (party == null) party = pm().restoreFromInvite(inv);
+        if (party.size() >= maxSize()) {
+            pm().removeInvite(p.getUniqueId(), inv.partyId);
+            m.send(p, "party-full", "max", maxSize());
+            return;
         }
-        if (leaderUUID == null) { m.send(p, "invite-none"); return; }
-        if (!pm.hasInvite(leaderUUID, p.getUniqueId())) {
-            // Try the leader's party anyway (in case invite was implicit)
-            Party pt = pm.getByLeader(leaderUUID);
-            if (pt == null) { m.send(p, "invite-none"); return; }
-        }
-        Party party = pm.getByLeader(leaderUUID);
-        if (party == null) { m.send(p, "party-not-found"); return; }
-        if (party.size() >= maxSize()) { m.send(p, "party-full", "max", maxSize()); return; }
-        pm.addMember(party, p.getUniqueId(), p.getName());
-        pm.clearInvite(leaderUUID, p.getUniqueId());
-        pm.save();
-        m.send(p, "invite-accepted-self", "leader", "&b" + party.getLeaderName());
-        plugin.broadcast(party, m.format("invite-accepted", "player", "&b" + p.getName()));
-        // relay to other servers so their caches update
-        plugin.getProxyBridge().sendAccept(leaderUUID, p.getUniqueId(), p.getName());
+
+        pm().clearInvites(p.getUniqueId());
+        pm().addMember(party, p.getUniqueId(), p.getName());
+        m.send(p, "invite-accepted-self", "leader", party.getLeaderName());
+        plugin.broadcastExcept(party, m.format("invite-accepted", "player", p.getName()), p.getUniqueId());
     }
 
     private void deny(Player p, String[] a) {
-        Messages m = plugin.getMessages();
+        Messages m = msg();
         if (a.length < 2) { m.send(p, "invalid-usage", "usage", "/party deny <leader>"); return; }
-        Player leader = Bukkit.getPlayerExact(a[1]);
-        UUID leaderUUID = null;
-        if (leader != null) leaderUUID = leader.getUniqueId();
-        else for (Party pt : pm.all())
-            if (pt.getLeaderName().equalsIgnoreCase(a[1])) { leaderUUID = pt.getLeader(); break; }
-        if (leaderUUID == null) { m.send(p, "invite-none"); return; }
-        pm.clearInvite(leaderUUID, p.getUniqueId());
+        Invite inv = pm().findInvite(p.getUniqueId(), a[1]);
+        if (inv == null) { m.send(p, "invite-none"); return; }
+
+        pm().removeInvite(p.getUniqueId(), inv.partyId);
         m.send(p, "invite-denied");
-        plugin.getProxyBridge().sendDeny(leaderUUID, p.getUniqueId(), p.getName());
+
+        Player leader = Bukkit.getPlayer(inv.leaderUuid);
+        if (leader != null) m.send(leader, "invite-denied-to-leader", "player", p.getName());
+        else plugin.getProxyBridge().sendInviteDeny(inv.leaderUuid, p.getName());
     }
 
     private void leave(Player p) {
-        Messages m = plugin.getMessages();
+        Messages m = msg();
         Party party = need(p); if (party == null) return;
         if (party.isLeader(p.getUniqueId())) { m.send(p, "leader-cannot-leave"); return; }
-        pm.removeMember(party, p.getUniqueId());
-        pm.save();
-        plugin.getChatToggled().remove(p.getUniqueId());
+        plugin.broadcastExcept(party, m.format("leave-broadcast", "player", p.getName()), p.getUniqueId());
+        pm().removeMember(party, p.getUniqueId(), "leave", p.getName());
         m.send(p, "leave-success");
-        plugin.broadcast(party, m.format("leave-broadcast", "player", "&b" + p.getName()));
     }
 
     private void disband(Player p) {
-        Messages m = plugin.getMessages();
+        Messages m = msg();
         Party party = need(p); if (party == null) return;
         if (!party.isLeader(p.getUniqueId())) { m.send(p, "only-leader"); return; }
+
+        long windowMs = Math.max(3, plugin.getConfig().getInt("settings.disband-confirm-seconds", 15)) * 1000L;
         long now = System.currentTimeMillis();
         Long t = disbandConfirm.get(p.getUniqueId());
-        if (t == null || now - t > 15000L) {
+        if (t == null || now - t > windowMs) {
             disbandConfirm.put(p.getUniqueId(), now);
-            m.send(p, "party-disband-confirm");
+            m.send(p, "party-disband-confirm", "seconds", windowMs / 1000L);
             return;
         }
         disbandConfirm.remove(p.getUniqueId());
-        plugin.broadcast(party, m.format("party-disbanded", "player", "&b" + p.getName()));
-        for (UUID u : party.getMembers()) plugin.getChatToggled().remove(u);
-        pm.disband(party);
-        pm.save();
+        plugin.broadcast(party, m.format("party-disbanded", "player", p.getName()));
+        pm().disband(party, p.getName());
     }
 
     private void kick(Player p, String[] a) {
-        Messages m = plugin.getMessages();
+        Messages m = msg();
         Party party = need(p); if (party == null) return;
         if (!party.isLeader(p.getUniqueId())) { m.send(p, "only-leader"); return; }
         if (a.length < 2) { m.send(p, "invalid-usage", "usage", "/party kick <player>"); return; }
         UUID t = party.findMember(a[1]);
         if (t == null) { m.send(p, "target-not-member"); return; }
         if (t.equals(p.getUniqueId())) { m.send(p, "kick-self"); return; }
+
         String tn = party.getMemberName(t);
-        plugin.broadcast(party, m.format("kick-success", "target", "&b" + tn, "player", "&b" + p.getName()));
-        pm.removeMember(party, t);
-        pm.save();
-        plugin.getChatToggled().remove(t);
+        plugin.broadcast(party, m.format("kick-success", "target", tn, "player", p.getName()));
+        pm().removeMember(party, t, "kick", p.getName());
     }
 
     private void transfer(Player p, String[] a) {
-        Messages m = plugin.getMessages();
+        Messages m = msg();
         Party party = need(p); if (party == null) return;
         if (!party.isLeader(p.getUniqueId())) { m.send(p, "only-leader"); return; }
         if (a.length < 2) { m.send(p, "invalid-usage", "usage", "/party transfer <player>"); return; }
         UUID t = party.findMember(a[1]);
         if (t == null) { m.send(p, "target-not-member"); return; }
         if (t.equals(p.getUniqueId())) { m.send(p, "transfer-self"); return; }
-        String oldName = p.getName();
-        plugin.broadcast(party, m.format("transfer-success", "player", "&b" + oldName,
-                "target", "&b" + party.getMemberName(t)));
-        Player online = Bukkit.getPlayer(t);
-        if (online != null) pm.updateLeader(party, online);
-        pm.save();
+
+        String newName = party.getMemberName(t);
+        plugin.broadcast(party, m.format("transfer-success", "player", p.getName(), "target", newName));
+        pm().setLeader(party, t, newName);
     }
 
     private void list(Player p) {
+        Messages m = msg();
         Party party = need(p); if (party == null) return;
-        p.sendMessage(Msg.color(plugin.getMessages().raw("list-header")
-                .replace("%leader%", party.getLeaderName())));
+        p.sendMessage(m.format("list-header", "leader", party.getLeaderName()));
         for (UUID u : party.getMembers()) {
-            String role = party.isLeader(u) ? "&bLeader" : "&fMember";
-            p.sendMessage(Msg.color(plugin.getMessages().raw("list-entry")
-                    .replace("%name%", party.getMemberName(u))
-                    .replace("%role%", role)));
+            String role = party.isLeader(u) ? m.raw("role-leader") : m.raw("role-member");
+            p.sendMessage(m.format("list-entry", "name", party.getMemberName(u), "role", role));
         }
         p.sendMessage(Msg.color("&b&m------------------------------------------"));
     }
 
+    private void info(Player p) {
+        Messages m = msg();
+        Party party = need(p); if (party == null) return;
+        int online = 0;
+        for (UUID u : party.getMembers()) if (Bukkit.getPlayer(u) != null) online++;
+        String role = party.isLeader(p.getUniqueId()) ? m.raw("role-leader") : m.raw("role-member");
+        String date = new SimpleDateFormat("yyyy-MM-dd HH:mm").format(new Date(party.getCreated()));
+
+        p.sendMessage(m.raw("info-header"));
+        p.sendMessage(m.format("info-leader", "leader", party.getLeaderName()));
+        p.sendMessage(m.format("info-members", "count", party.size(), "max", maxSize(), "online", online));
+        p.sendMessage(m.format("info-you", "role", role));
+        p.sendMessage(m.format("info-color", "code", party.getColor(), "name", Msg.colorName(party.getColor())));
+        p.sendMessage(m.format("info-created", "date", date));
+        p.sendMessage(Msg.color("&b&m------------------------------------------"));
+    }
+
     private void chat(Player p, String[] a, int from) {
-        Messages m = plugin.getMessages();
+        Messages m = msg();
         Party party = need(p); if (party == null) return;
         if (a.length <= from) {
             Set<UUID> t = plugin.getChatToggled();
@@ -271,45 +278,37 @@ public class PartyCommand implements CommandExecutor, TabCompleter {
     }
 
     private void color(Player p, String[] a) {
-        Messages m = plugin.getMessages();
+        Messages m = msg();
         Party party = need(p); if (party == null) return;
         if (!party.isLeader(p.getUniqueId())) { m.send(p, "only-leader"); return; }
         if (a.length < 2) {
-            m.send(p, "color-current", "code", "&" + party.getColor(),
-                    "name", nameOf(party.getColor()));
+            m.send(p, "color-current", "code", party.getColor(), "name", Msg.colorName(party.getColor()));
             return;
         }
-        char c = a[1].toLowerCase().charAt(0);
-        for (String x : CODES) if (x.equals(String.valueOf(c))) {
-            party.setColor(c);
-            pm.save();
-            m.send(p, "color-set", "code", "&" + c, "name", nameOf(c));
-            return;
-        }
-        m.send(p, "invalid-usage", "usage", "/party color <0-9a-f>");
-    }
-
-    private String nameOf(char c) {
-        for (int i = 0; i < CODES.length; i++) if (CODES[i].equals(String.valueOf(c))) return NAMES[i];
-        return "Unknown";
+        if (a[1].length() != 1 || !Msg.isColorCode(a[1].charAt(0))) { m.send(p, "color-invalid"); return; }
+        char c = Character.toLowerCase(a[1].charAt(0));
+        pm().setColor(party, c);
+        m.send(p, "color-set", "code", c, "name", Msg.colorName(c));
     }
 
     @Override
     public List<String> onTabComplete(CommandSender s, Command c, String l, String[] a) {
         if (!(s instanceof Player) || c.getName().equalsIgnoreCase("pc")) return Collections.emptyList();
         Player p = (Player) s;
-        Party party = pm.getParty(p.getUniqueId());
+        Party party = pm().getParty(p.getUniqueId());
+
         if (a.length == 1) return filter(SUBS, a[0]);
         if (a.length == 2) {
             List<String> pool = new ArrayList<String>();
             String sub = a[0].toLowerCase();
-            if (sub.equals("invite") || sub.equals("accept") || sub.equals("deny")) {
-                for (Player o : Bukkit.getOnlinePlayers()) pool.add(o.getName());
-                for (Party pt : pm.all()) pool.add(pt.getLeaderName());
+            if (sub.equals("invite")) {
+                for (Player o : Bukkit.getOnlinePlayers()) if (!o.equals(p)) pool.add(o.getName());
+            } else if (sub.equals("accept") || sub.equals("deny")) {
+                pool.addAll(pm().inviteLeaderNames(p.getUniqueId()));
             } else if (sub.equals("kick") || sub.equals("transfer")) {
                 if (party != null) for (UUID u : party.getMembers()) pool.add(party.getMemberName(u));
             } else if (sub.equals("color")) {
-                pool.addAll(Arrays.asList(CODES));
+                pool.addAll(Msg.colorCodes());
             }
             return filter(pool, a[1]);
         }
@@ -318,7 +317,8 @@ public class PartyCommand implements CommandExecutor, TabCompleter {
 
     private List<String> filter(List<String> src, String start) {
         List<String> out = new ArrayList<String>();
-        for (String x : src) if (x.toLowerCase().startsWith(start.toLowerCase())) out.add(x);
+        String s = start.toLowerCase();
+        for (String x : src) if (x.toLowerCase().startsWith(s)) out.add(x);
         return out;
     }
 }

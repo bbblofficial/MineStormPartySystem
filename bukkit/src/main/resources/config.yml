@@ -4,14 +4,21 @@
 settings:
   party-max-size: 8
   invite-expire-seconds: 60
+  disband-confirm-seconds: 15
+  # /party invite <player> creates a party automatically when you have none
+  auto-create-on-invite: true
+  # Hide the vanilla join/quit message for players that are in a party
   suppress-public-join-quit: false
-  allow-cross-server-invites: true
-  default-color: b
+  # Cross-server relay through the BungeeCord / Velocity plugin.
+  # Set to false on a standalone server (also blocks forged client messages).
+  # Changing this requires a restart.
+  cross-server: true
 
+# Placeholders: %player% %leader% %color% (party color code) %message%
 formats:
-  member-join: "&bParty > &f%player% &bjoined the Server!"
-  member-quit: "&bParty > &f%player% &bleft the Server!"
-  party-chat: "&bParty > &f%player% &7» &f%message%"
+  member-join: "&%color%Party > &f%player% &%color%joined the Server!"
+  member-quit: "&%color%Party > &f%player% &%color%left the Server!"
+  party-chat: "&%color%Party > &f%player% &7\u00bb &f%message%"
 
 placeholders:
   no-party: ""

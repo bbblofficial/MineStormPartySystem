@@ -6,7 +6,7 @@
 
   <groupId>com.minestorm.party</groupId>
   <artifactId>minestormparty-parent</artifactId>
-  <version>1.0.0</version>
+  <version>1.1.0</version>
   <packaging>pom</packaging>
   <name>MineStormParty</name>
   <description>Cross-server Party System by Muvixo</description>
@@ -15,6 +15,8 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <maven.compiler.source>1.8</maven.compiler.source>
     <maven.compiler.target>1.8</maven.compiler.target>
+    <bungee.version>1.20-R0.2</bungee.version>
+    <velocity.version>3.3.0-SNAPSHOT</velocity.version>
   </properties>
 
   <modules>
@@ -41,8 +43,10 @@
       <url>https://hub.spigotmc.org/nexus/content/repositories/snapshots/</url>
     </repository>
     <repository>
-      <id>sonatype</id>
-      <url>https://oss.sonatype.org/content/groups/public/</url>
+      <id>sonatype-central-snapshots</id>
+      <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+      <releases><enabled>false</enabled></releases>
+      <snapshots><enabled>true</enabled></snapshots>
     </repository>
     <repository>
       <id>papermc</id>
@@ -50,7 +54,7 @@
     </repository>
     <repository>
       <id>placeholderapi</id>
-      <url>https://repo.extendedclip.com/content/repositories/placeholderapi/</url>
+      <url>https://repo.extendedclip.com/releases/</url>
     </repository>
   </repositories>
 
@@ -60,12 +64,17 @@
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-compiler-plugin</artifactId>
-          <version>3.13.0</version>
+          <version>3.14.0</version>
         </plugin>
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-shade-plugin</artifactId>
-          <version>3.5.1</version>
+          <version>3.6.0</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-resources-plugin</artifactId>
+          <version>3.3.1</version>
         </plugin>
       </plugins>
     </pluginManagement>
