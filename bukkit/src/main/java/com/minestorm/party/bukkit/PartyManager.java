@@ -15,7 +15,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * In-memory party state + async SQLite persistence.
+ * In-memory party state + async persistence (SQLite or MySQL).
  * Everything here is meant to be called from the server thread.
  *
  * Methods without "remote" apply the change locally AND broadcast it to the network.
@@ -28,13 +28,15 @@ public class PartyManager {
 
     private final Map<UUID, Party> parties = new LinkedHashMap<UUID, Party>();        // partyId -> party
     private final Map<UUID, UUID> playerParty = new HashMap<UUID, UUID>();            // player  -> partyId
-    private final Map<UUID, Map<UUID, Invite>> invites = new HashMap<UUID, Map<UUID, Invite>>(); // target -> partyId -> invite
+    private final Map<UUID, Map<UUID, Invite>> invites = new HashMap<UUID, Map<UUID, Invite>>();
     private final Map<String, Long> sentInvites = new HashMap<String, Long>();        // partyId:name -> expires
 
     public PartyManager(MineStormParty plugin) {
         this.plugin = plugin;
         this.db = new Database(plugin);
     }
+
+    public Database.Type getDatabaseType() { return db.getType(); }
 
     // ------------------------------------------------------------------
     // lookups
@@ -54,7 +56,7 @@ public class PartyManager {
     public List<Party> all() { return new ArrayList<Party>(parties.values()); }
 
     // ------------------------------------------------------------------
-    // local mutations (broadcast to the network)
+    // local mutations
     // ------------------------------------------------------------------
     public Party create(Player leader) {
         Party p = new Party(UUID.randomUUID(), leader.getUniqueId(), leader.getName(), System.currentTimeMillis());
@@ -70,7 +72,6 @@ public class PartyManager {
         plugin.getProxyBridge().sendAdd(party, u, name);
     }
 
-    /** reason: "leave" | "kick" | "admin" */
     public void removeMember(Party party, UUID u, String reason, String actor) {
         String name = party.getMemberName(u);
         applyRemove(party, u);
@@ -96,7 +97,6 @@ public class PartyManager {
         plugin.getProxyBridge().sendDisband(id, actor);
     }
 
-    /** Called on join - keeps stored names in sync with name changes. */
     public void syncName(Player p) {
         Party party = getParty(p.getUniqueId());
         if (party == null) return;
@@ -108,11 +108,11 @@ public class PartyManager {
     }
 
     // ------------------------------------------------------------------
-    // remote mutations (received from the network)
+    // remote mutations
     // ------------------------------------------------------------------
     public void remoteCreate(UUID id, UUID leader, String leaderName, char color, long created) {
         Party existing = parties.get(id);
-        if (existing != null) { // used by /mspa sync to converge
+        if (existing != null) {
             existing.setColor(color);
             if (!existing.isLeader(leader)) existing.setLeader(leader, leaderName);
             playerParty.put(leader, id);
@@ -149,7 +149,6 @@ public class PartyManager {
 
     public void remoteDisband(Party party) { applyDisband(party); }
 
-    /** Rebuilds a party from an invite snapshot when this server never heard about it. */
     public Party restoreFromInvite(Invite inv) {
         Party existing = parties.get(inv.partyId);
         if (existing != null) return existing;
@@ -183,7 +182,7 @@ public class PartyManager {
     }
 
     private void applyRemove(Party party, UUID u) {
-        if (party.isLeader(u)) return; // leaders are never removed, the party is disbanded instead
+        if (party.isLeader(u)) return;
         party.removeMember(u);
         playerParty.remove(u);
         plugin.getChatToggled().remove(u);
@@ -200,7 +199,6 @@ public class PartyManager {
         deleteParty(party.getId());
     }
 
-    /** Removes a player from any stale party this server still thinks they are in. */
     private void detach(UUID u) {
         Party old = getParty(u);
         if (old == null) return;
@@ -209,7 +207,7 @@ public class PartyManager {
     }
 
     // ------------------------------------------------------------------
-    // invites
+    // invites (unchanged)
     // ------------------------------------------------------------------
     public void addInvite(UUID target, Invite inv) {
         Map<UUID, Invite> m = invites.get(target);
@@ -280,6 +278,21 @@ public class PartyManager {
         playerParty.clear();
         try {
             db.init();
+            loadFromStorage();
+        } catch (Exception ex) {
+            plugin.getLogger().severe("Could not load parties: " + ex.getMessage());
+        }
+        plugin.getLogger().info("Loaded " + parties.size() + " party(ies) from storage ("
+                + db.getType() + ").");
+    }
+
+    /** Re-reads everything from storage without touching the running cache
+     *  until the read completes. Safe to call from a background thread. */
+    public synchronized void reloadFromStorage() {
+        try {
+            final Map<UUID, Party> fresh = new LinkedHashMap<UUID, Party>();
+            final Map<UUID, UUID> freshPlayer = new HashMap<UUID, UUID>();
+
             db.query(new Database.Work<Void>() {
                 @Override public Void run(java.sql.Connection c) throws Exception {
                     try (Statement st = c.createStatement()) {
@@ -290,12 +303,12 @@ public class PartyManager {
                                         UUID.fromString(rs.getString(2)), rs.getString(3), rs.getLong(5));
                                 String col = rs.getString(4);
                                 if (col != null && !col.isEmpty()) p.setColor(col.charAt(0));
-                                parties.put(p.getId(), p);
+                                fresh.put(p.getId(), p);
                             }
                         }
                         try (ResultSet rs = st.executeQuery("SELECT uuid, party_id, name FROM msp_members")) {
                             while (rs.next()) {
-                                Party p = parties.get(UUID.fromString(rs.getString(2)));
+                                Party p = fresh.get(UUID.fromString(rs.getString(2)));
                                 if (p == null) continue;
                                 p.addMember(UUID.fromString(rs.getString(1)), rs.getString(3));
                             }
@@ -304,16 +317,57 @@ public class PartyManager {
                     return null;
                 }
             });
-            for (Party p : parties.values()) {
-                for (UUID u : p.getMembers()) playerParty.put(u, p.getId());
+
+            for (Party p : fresh.values()) {
+                for (UUID u : p.getMembers()) freshPlayer.put(u, p.getId());
+            }
+
+            parties.clear();
+            parties.putAll(fresh);
+            playerParty.clear();
+            playerParty.putAll(freshPlayer);
+
+            // refresh chat-toggle set for players who left their party externally
+            Iterator<UUID> it = plugin.getChatToggled().iterator();
+            while (it.hasNext()) {
+                if (!playerParty.containsKey(it.next())) it.remove();
             }
         } catch (Exception ex) {
-            plugin.getLogger().severe("Could not load parties: " + ex.getMessage());
+            plugin.getLogger().warning("Cache refresh failed: " + ex.getMessage());
         }
-        plugin.getLogger().info("Loaded " + parties.size() + " party(ies) from SQLite.");
     }
 
-    /** Re-writes everything (used by /mspa save). Runs async. */
+    /** Loads into the current (possibly empty) cache. Used at startup. */
+    private void loadFromStorage() throws Exception {
+        db.query(new Database.Work<Void>() {
+            @Override public Void run(java.sql.Connection c) throws Exception {
+                try (Statement st = c.createStatement()) {
+                    try (ResultSet rs = st.executeQuery(
+                            "SELECT party_id, leader_uuid, leader_name, color, created FROM msp_parties")) {
+                        while (rs.next()) {
+                            Party p = new Party(UUID.fromString(rs.getString(1)),
+                                    UUID.fromString(rs.getString(2)), rs.getString(3), rs.getLong(5));
+                            String col = rs.getString(4);
+                            if (col != null && !col.isEmpty()) p.setColor(col.charAt(0));
+                            parties.put(p.getId(), p);
+                        }
+                    }
+                    try (ResultSet rs = st.executeQuery("SELECT uuid, party_id, name FROM msp_members")) {
+                        while (rs.next()) {
+                            Party p = parties.get(UUID.fromString(rs.getString(2)));
+                            if (p == null) continue;
+                            p.addMember(UUID.fromString(rs.getString(1)), rs.getString(3));
+                        }
+                    }
+                }
+                return null;
+            }
+        });
+        for (Party p : parties.values()) {
+            for (UUID u : p.getMembers()) playerParty.put(u, p.getId());
+        }
+    }
+
     public void saveAll() {
         for (Party p : parties.values()) {
             persistParty(p);
@@ -329,10 +383,15 @@ public class PartyManager {
         final String leaderName = p.getLeaderName();
         final String color = String.valueOf(p.getColor());
         final long created = p.getCreated();
+        final boolean mysql = db.getType() == Database.Type.MYSQL;
         db.execute(new Database.Work<Void>() {
             @Override public Void run(java.sql.Connection c) throws Exception {
-                try (PreparedStatement ps = c.prepareStatement(
-                        "INSERT OR REPLACE INTO msp_parties(party_id, leader_uuid, leader_name, color, created) VALUES(?,?,?,?,?)")) {
+                String sql = mysql
+                    ? "INSERT INTO msp_parties(party_id, leader_uuid, leader_name, color, created) VALUES(?,?,?,?,?) "
+                    + "ON DUPLICATE KEY UPDATE leader_uuid=VALUES(leader_uuid), leader_name=VALUES(leader_name), "
+                    + "color=VALUES(color)"
+                    : "INSERT OR REPLACE INTO msp_parties(party_id, leader_uuid, leader_name, color, created) VALUES(?,?,?,?,?)";
+                try (PreparedStatement ps = c.prepareStatement(sql)) {
                     ps.setString(1, id);
                     ps.setString(2, leader);
                     ps.setString(3, leaderName);
@@ -349,10 +408,14 @@ public class PartyManager {
         final String pid = partyId.toString();
         final String u = uuid.toString();
         final String n = name;
+        final boolean mysql = db.getType() == Database.Type.MYSQL;
         db.execute(new Database.Work<Void>() {
             @Override public Void run(java.sql.Connection c) throws Exception {
-                try (PreparedStatement ps = c.prepareStatement(
-                        "INSERT OR REPLACE INTO msp_members(uuid, party_id, name) VALUES(?,?,?)")) {
+                String sql = mysql
+                    ? "INSERT INTO msp_members(uuid, party_id, name) VALUES(?,?,?) "
+                    + "ON DUPLICATE KEY UPDATE party_id=VALUES(party_id), name=VALUES(name)"
+                    : "INSERT OR REPLACE INTO msp_members(uuid, party_id, name) VALUES(?,?,?)";
+                try (PreparedStatement ps = c.prepareStatement(sql)) {
                     ps.setString(1, u);
                     ps.setString(2, pid);
                     ps.setString(3, n);

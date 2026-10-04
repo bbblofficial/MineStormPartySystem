@@ -26,6 +26,7 @@ public class MineStormParty extends JavaPlugin {
     private PartyManager partyManager;
     private Messages messages;
     private ProxyBridge proxyBridge;
+    private CacheRefresher refresher;
     private boolean papi;
 
     private final Set<UUID> chatToggled = Collections.synchronizedSet(new HashSet<UUID>());
@@ -52,20 +53,24 @@ public class MineStormParty extends JavaPlugin {
 
         Bukkit.getPluginManager().registerEvents(new PartyListener(this), this);
 
-        // purge expired invites every 5 seconds
         Bukkit.getScheduler().runTaskTimer(this, new Runnable() {
             @Override public void run() { partyManager.purgeExpired(); }
         }, 100L, 100L);
 
+        refresher = new CacheRefresher(this);
+        refresher.start();
+
         hookPapi();
         getLogger().info("MineStormParty enabled"
                 + (proxyBridge.isEnabled() ? " (cross-server)" : " (standalone)")
-                + (papi ? " (PAPI hooked)." : "."));
+                + (papi ? " (PAPI hooked)." : ".")
+                + " Storage: " + partyManager.getDatabaseType());
         getLogger().info("Created by Muvixo.");
     }
 
     @Override
     public void onDisable() {
+        if (refresher != null) refresher.stop();
         if (partyManager != null) partyManager.shutdown();
     }
 
@@ -94,8 +99,6 @@ public class MineStormParty extends JavaPlugin {
     public Set<UUID> getChatToggled() { return chatToggled; }
 
     // ------------------------------------------------------------------
-    // broadcast helpers (local online members only)
-    // ------------------------------------------------------------------
     public void broadcast(Party party, String colored) { broadcastExcept(party, colored, null); }
 
     public void broadcastExcept(Party party, String colored, UUID except) {
@@ -106,7 +109,6 @@ public class MineStormParty extends JavaPlugin {
         }
     }
 
-    /** Applies %player% %leader% %color% to a template and colorizes it. */
     public String formatParty(String template, Party party, String playerName) {
         return Msg.color(template
                 .replace("%color%", String.valueOf(party.getColor()))
@@ -127,9 +129,6 @@ public class MineStormParty extends JavaPlugin {
         proxyBridge.sendChat(party, sender.getName(), text);
     }
 
-    // ------------------------------------------------------------------
-    // invite notification with clickable [ACCEPT] [DENY]
-    // ------------------------------------------------------------------
     public void notifyInvite(Player target, Invite inv) {
         long seconds = Math.max(1L, (inv.expires - System.currentTimeMillis()) / 1000L);
         messages.send(target, "invite-received", "player", inv.leaderName, "seconds", seconds);

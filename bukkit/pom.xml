@@ -32,7 +32,17 @@
       <artifactId>sqlite-jdbc</artifactId>
       <version>3.46.1.3</version>
     </dependency>
-  </dependencies>
+    <dependency>
+    <groupId>com.mysql</groupId>
+    <artifactId>mysql-connector-j</artifactId>
+    <version>8.0.33</version>
+  </dependency>
+  <dependency>
+    <groupId>com.zaxxer</groupId>
+    <artifactId>HikariCP</artifactId>
+    <version>4.0.3</version>
+  </dependency>
+</dependencies>
 
   <build>
     <finalName>MineStormParty-Bukkit-${project.version}</finalName>
@@ -58,6 +68,13 @@
             <goals><goal>shade</goal></goals>
             <configuration>
               <createDependencyReducedPom>false</createDependencyReducedPom>
+              <relocations>
+                <relocation>
+                  <pattern>com.zaxxer.hikari</pattern>
+                  <shadedPattern>com.minestorm.party.libs.hikari</shadedPattern>
+                </relocation>
+              </relocations>
+
               <!-- NOTE: org.sqlite must NOT be relocated: the native JNI library
                    is bound to the original package name. -->
               <transformers>

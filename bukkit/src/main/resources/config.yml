@@ -23,5 +23,30 @@ formats:
 placeholders:
   no-party: ""
 
+# ============================================================
+#  Database — the plugin creates the schema itself.
+#  With type: mysql the database / tables / indexes are created
+#  automatically on first start. You only fill in the four
+#  values below. Use type: sqlite for a single-server setup.
+# ============================================================
 database:
-  file: "guilds.db"
+  type: mysql
+
+  # --- fill these in for MySQL ---
+  host: "127.0.0.1"
+  database: "minestormparty"
+  username: "root"
+  password: ""
+
+  # --- optional overrides ---
+  port: 3306
+  useSSL: false
+  serverTimezone: "UTC"
+  poolSize: 10
+
+  # --- used only when type: sqlite ---
+  file: "parties.db"
+
+  # How often each server re-reads the shared DB (seconds).
+  # 0 = disabled (changes only appear on restart).
+  refresh-interval-seconds: 5
