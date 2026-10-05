@@ -6,6 +6,7 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.AsyncPlayerChatEvent;
+import org.bukkit.event.player.AsyncPlayerPreLoginEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerKickEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
@@ -15,6 +16,12 @@ public class PartyListener implements Listener {
     private final MineStormParty plugin;
 
     public PartyListener(MineStormParty plugin) { this.plugin = plugin; }
+
+    /** MSP-FIXER v2: the player may have joined / left a party on another server a moment ago. */
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onPreLogin(AsyncPlayerPreLoginEvent e) {
+        plugin.getPartyManager().syncFromAsyncThread();
+    }
 
     private boolean suppress() {
         return plugin.getConfig().getBoolean("settings.suppress-public-join-quit", false);

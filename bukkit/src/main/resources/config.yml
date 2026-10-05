@@ -50,3 +50,7 @@ database:
   # How often each server re-reads the shared DB (seconds).
   # 0 = disabled (changes only appear on restart).
   refresh-interval-seconds: 5
+
+  # How often each server checks the DB for invites sent from OTHER servers (seconds).
+  # 0 = disabled (cross-server invites then rely only on the proxy relay).
+  invite-poll-interval-seconds: 2

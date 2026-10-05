@@ -9,8 +9,10 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
@@ -23,9 +25,20 @@ import java.util.logging.Level;
  * username / password from config.yml. If the database does not exist
  * it is created automatically along with the required tables and indexes.
  *
- * All JDBC work runs on ONE dedicated thread, so the server thread never
- * blocks on disk I/O (except the initial load) and the single connection
- * is never used concurrently.
+ * All JDBC work runs on ONE dedicated thread, so writes are applied in the
+ * exact order they were queued and the server thread never blocks on I/O
+ * (except for the few explicit blocking calls).
+ *
+ * MSP-FIXER v2:
+ *  - MySQL: a connection is borrowed from the Hikari pool for every task
+ *    instead of being held forever (a held connection silently dies after
+ *    wait_timeout / a network blip and every later write was lost).
+ *  - Pool is created lazily and tolerates the database being down at
+ *    start-up; schema creation is retried until it succeeds.
+ *  - connect / socket timeouts so a dead socket can never freeze the DB thread.
+ *  - Every task is retried once on SQL errors.
+ *  - SQLite schema no longer uses MySQL-only inline INDEX syntax.
+ *  - Error logging is throttled (no log spam while the DB is down).
  */
 public class Database {
 
@@ -40,14 +53,18 @@ public class Database {
     private final File file;
 
     // MySQL
-    private final String jdbcUrl;        // full DB url (after DB exists)
+    private final String jdbcUrl;        // full DB url
     private final String serverUrl;      // url without db name, used to CREATE DATABASE
     private final String dbName;
     private final String username;
     private final String password;
 
-    private Connection conn;             // only touched from the executor thread
-    private HikariDataSource pool;
+    private Connection sqliteConn;       // only touched from the executor thread
+    private HikariDataSource pool;       // only touched from the executor thread
+    private boolean schemaReady;         // only touched from the executor thread
+
+    private volatile long lastErrorLog = 0L;
+    private volatile int suppressed = 0;
 
     private final ExecutorService exec = Executors.newSingleThreadExecutor(new ThreadFactory() {
         @Override public Thread newThread(Runnable r) {
@@ -86,7 +103,8 @@ public class Database {
                     + "&characterEncoding=utf8"
                     + "&useUnicode=true"
                     + "&allowPublicKeyRetrieval=true"
-                    + "&autoReconnect=true"
+                    + "&connectTimeout=10000"
+                    + "&socketTimeout=30000"
                     + "&createDatabaseIfNotExist=true";
             this.serverUrl = base + "/" + opts;
             this.jdbcUrl = base + "/" + dbName + opts;
@@ -95,101 +113,181 @@ public class Database {
 
     public Type getType() { return type; }
 
-    // -------- public API (same shape as before) --------
+    // -------- public API --------
 
+    /** Forces a first connection + schema creation. Throws if the database is unreachable. */
     public void init() throws Exception {
         query(new Work<Void>() {
-            @Override public Void run(Connection c) throws SQLException {
-                String engineSuffix = type == Type.MYSQL
-                        ? " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
-                        : "";
-                try (Statement st = c.createStatement()) {
-                    st.executeUpdate("CREATE TABLE IF NOT EXISTS msp_parties ("
-                            + " party_id VARCHAR(36) PRIMARY KEY,"
-                            + " leader_uuid VARCHAR(36) NOT NULL,"
-                            + " leader_name VARCHAR(16) NOT NULL,"
-                            + " color VARCHAR(1) NOT NULL DEFAULT 'b',"
-                            + " created BIGINT NOT NULL)" + engineSuffix);
-                    st.executeUpdate("CREATE TABLE IF NOT EXISTS msp_members ("
-                            + " uuid VARCHAR(36) PRIMARY KEY,"
-                            + " party_id VARCHAR(36) NOT NULL,"
-                            + " name VARCHAR(16) NOT NULL,"
-                            + " INDEX idx_msp_members_party (party_id),"
-                            + " INDEX idx_msp_members_uuid (uuid))" + engineSuffix);
-                }
-                return null;
-            }
+            @Override public Void run(Connection c) { return null; }
         });
     }
 
     /** Synchronous (blocks the caller until finished). */
     public <T> T query(final Work<T> w) throws Exception {
-        return exec.submit(new Callable<T>() {
-            @Override public T call() throws Exception { return w.run(conn()); }
-        }).get();
+        return query(w, 0L);
     }
 
-    /** Fire-and-forget on the DB thread. */
+    /** Synchronous with a timeout (0 = wait forever). */
+    public <T> T query(final Work<T> w, long timeoutMs) throws Exception {
+        Future<T> f = exec.submit(new Callable<T>() {
+            @Override public T call() throws Exception { return run(w); }
+        });
+        try {
+            return timeoutMs > 0 ? f.get(timeoutMs, TimeUnit.MILLISECONDS) : f.get();
+        } catch (ExecutionException ee) {
+            Throwable c = ee.getCause();
+            if (c instanceof Exception) throw (Exception) c;
+            throw ee;
+        }
+    }
+
+    /** Fire-and-forget on the DB thread (ordered). */
     public void execute(final Work<?> w) {
         try {
             exec.execute(new Runnable() {
                 @Override public void run() {
-                    try { w.run(conn()); }
-                    catch (Exception ex) { plugin.getLogger().log(Level.SEVERE, "Database error", ex); }
+                    try { Database.this.run(w); }
+                    catch (Throwable ex) { logError("Database write failed (data may not be saved!)", ex); }
                 }
             });
-        } catch (RejectedExecutionException ignored) { }
+        } catch (RejectedExecutionException ex) {
+            plugin.getLogger().warning("Database is shutting down - a write was dropped.");
+        }
+    }
+
+    /** Blocks until everything queued so far has been executed. */
+    public void flush(long timeoutMs) {
+        try {
+            query(new Work<Void>() {
+                @Override public Void run(Connection c) { return null; }
+            }, timeoutMs);
+        } catch (Throwable ignored) { }
     }
 
     public void close() {
         exec.shutdown();
-        try { exec.awaitTermination(10, TimeUnit.SECONDS); }
-        catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-        if (pool != null && !pool.isClosed()) pool.close();
-        try { if (conn != null && !conn.isClosed()) conn.close(); }
-        catch (SQLException ignored) { }
+        try {
+            if (!exec.awaitTermination(10, TimeUnit.SECONDS)) {
+                plugin.getLogger().warning("Database queue did not finish within 10s - some writes may be lost.");
+            }
+        } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        try { if (pool != null && !pool.isClosed()) pool.close(); } catch (Throwable ignored) { }
+        try { if (sqliteConn != null && !sqliteConn.isClosed()) sqliteConn.close(); } catch (SQLException ignored) { }
     }
 
     // -------- internals --------
 
-    private Connection conn() throws Exception {
-        if (conn == null || conn.isClosed()) {
-            if (type == Type.SQLITE) {
-                File dir = file.getParentFile();
-                if (dir != null && !dir.exists()) dir.mkdirs();
-                Class.forName("org.sqlite.JDBC");
-                conn = DriverManager.getConnection(jdbcUrl);
-                try (Statement st = conn.createStatement()) {
-                    st.execute("PRAGMA busy_timeout = 5000");
-                    st.execute("PRAGMA foreign_keys = ON");
+    /** Runs a task with one automatic retry. Executor thread only. */
+    private <T> T run(Work<T> w) throws Exception {
+        Exception last = null;
+        for (int attempt = 0; attempt < 2; attempt++) {
+            try {
+                if (type == Type.SQLITE) {
+                    Connection c = sqlite();
+                    ensureSchema(c);
+                    return w.run(c);
                 }
-            } else {
-                ensureDatabaseExists();
-                HikariConfig cfg = new HikariConfig();
-                cfg.setJdbcUrl(jdbcUrl);
-                cfg.setUsername(username);
-                cfg.setPassword(password);
-                cfg.setDriverClassName("com.mysql.cj.jdbc.Driver");
-                cfg.setMaximumPoolSize(plugin.getConfig().getInt("database.poolSize", 10));
-                cfg.setMinimumIdle(1);
-                cfg.setConnectionTimeout(10000L);
-                cfg.setIdleTimeout(600000L);
-                cfg.setMaxLifetime(1800000L);
-                cfg.setPoolName("MineStormParty-MySQL");
-                cfg.setLeakDetectionThreshold(60000L);
-                pool = new HikariDataSource(cfg);
-                conn = pool.getConnection();
+                try (Connection c = mysqlPool().getConnection()) {
+                    ensureSchema(c);
+                    return w.run(c);
+                }
+            } catch (Exception ex) {
+                last = ex;
+                if (type == Type.SQLITE) {
+                    try { if (sqliteConn != null) sqliteConn.close(); } catch (Throwable ignored) { }
+                    sqliteConn = null;
+                }
+                if (attempt == 0) {
+                    try { Thread.sleep(400L); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); throw ex; }
+                }
             }
         }
-        return conn;
+        throw last;
+    }
+
+    private Connection sqlite() throws Exception {
+        if (sqliteConn == null || sqliteConn.isClosed()) {
+            File dir = file.getParentFile();
+            if (dir != null && !dir.exists()) dir.mkdirs();
+            Class.forName("org.sqlite.JDBC");
+            sqliteConn = DriverManager.getConnection(jdbcUrl);
+            try (Statement st = sqliteConn.createStatement()) {
+                st.execute("PRAGMA busy_timeout = 5000");
+            }
+        }
+        return sqliteConn;
+    }
+
+    private HikariDataSource mysqlPool() throws Exception {
+        if (pool == null || pool.isClosed()) {
+            ensureDatabaseExists();
+            HikariConfig cfg = new HikariConfig();
+            cfg.setJdbcUrl(jdbcUrl);
+            cfg.setUsername(username);
+            cfg.setPassword(password);
+            cfg.setDriverClassName("com.mysql.cj.jdbc.Driver");
+            cfg.setMaximumPoolSize(Math.max(2, plugin.getConfig().getInt("database.poolSize", 10)));
+            cfg.setMinimumIdle(1);
+            cfg.setConnectionTimeout(10000L);
+            cfg.setValidationTimeout(5000L);
+            cfg.setIdleTimeout(600000L);
+            cfg.setKeepaliveTime(120000L);   // keeps idle connections alive (wait_timeout)
+            cfg.setMaxLifetime(1500000L);    // 25 min, must stay below MySQL wait_timeout
+            cfg.setInitializationFailTimeout(-1L); // do not fail if the DB is down right now
+            cfg.setPoolName("MineStormParty-MySQL");
+            pool = new HikariDataSource(cfg);
+        }
+        return pool;
+    }
+
+    /** Creates tables / indexes on the first working connection. Executor thread only. */
+    private void ensureSchema(Connection c) throws SQLException {
+        if (schemaReady) return;
+        boolean mysql = type == Type.MYSQL;
+        String engine = mysql ? " ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci" : "";
+        try (Statement st = c.createStatement()) {
+            st.executeUpdate("CREATE TABLE IF NOT EXISTS msp_parties ("
+                    + " party_id VARCHAR(36) PRIMARY KEY,"
+                    + " leader_uuid VARCHAR(36) NOT NULL,"
+                    + " leader_name VARCHAR(32) NOT NULL,"
+                    + " color VARCHAR(1) NOT NULL DEFAULT 'b',"
+                    + " created BIGINT NOT NULL)" + engine);
+
+            st.executeUpdate("CREATE TABLE IF NOT EXISTS msp_members ("
+                    + " uuid VARCHAR(36) PRIMARY KEY,"
+                    + " party_id VARCHAR(36) NOT NULL,"
+                    + " name VARCHAR(32) NOT NULL"
+                    + (mysql ? ", INDEX idx_msp_members_party (party_id)" : "")
+                    + ")" + engine);
+
+            // Pending invites live in the database so they work between servers
+            // even when the proxy relay is missing / has nobody to carry a message.
+            st.executeUpdate("CREATE TABLE IF NOT EXISTS msp_invites ("
+                    + " party_id VARCHAR(36) NOT NULL,"
+                    + " target_name VARCHAR(32) NOT NULL,"
+                    + " leader_uuid VARCHAR(36) NOT NULL,"
+                    + " leader_name VARCHAR(32) NOT NULL,"
+                    + " color VARCHAR(1) NOT NULL DEFAULT 'b',"
+                    + " expires BIGINT NOT NULL,"
+                    + " PRIMARY KEY (party_id, target_name)"
+                    + (mysql ? ", INDEX idx_msp_invites_target (target_name)" : "")
+                    + ")" + engine);
+
+            if (!mysql) {
+                st.executeUpdate("CREATE INDEX IF NOT EXISTS idx_msp_members_party ON msp_members(party_id)");
+                st.executeUpdate("CREATE INDEX IF NOT EXISTS idx_msp_invites_target ON msp_invites(target_name)");
+            }
+        }
+        schemaReady = true;
     }
 
     /** Connect to the server (no db) and CREATE DATABASE if needed. */
-    private void ensureDatabaseExists() throws SQLException {
+    private void ensureDatabaseExists() {
         try {
             Class.forName("com.mysql.cj.jdbc.Driver");
         } catch (ClassNotFoundException ex) {
-            throw new SQLException("MySQL driver not found", ex);
+            plugin.getLogger().severe("MySQL driver not found in the jar!");
+            return;
         }
         try (Connection c = DriverManager.getConnection(serverUrl, username, password);
              Statement st = c.createStatement()) {
@@ -199,6 +297,19 @@ public class Database {
             plugin.getLogger().warning(
                 "Could not auto-create database '" + dbName + "': " + ex.getMessage());
             // continue; the DB probably exists and we simply lack CREATE
+        }
+    }
+
+    /** Logs the first error immediately, then at most one every 30 seconds. */
+    void logError(String msg, Throwable ex) {
+        long now = System.currentTimeMillis();
+        if (now - lastErrorLog > 30000L) {
+            lastErrorLog = now;
+            int s = suppressed;
+            suppressed = 0;
+            plugin.getLogger().log(Level.SEVERE, msg + (s > 0 ? " (+" + s + " similar errors suppressed)" : ""), ex);
+        } else {
+            suppressed++;
         }
     }
 }

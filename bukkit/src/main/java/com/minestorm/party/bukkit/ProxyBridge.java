@@ -187,18 +187,22 @@ public class ProxyBridge implements PluginMessageListener {
             }
             long expires = System.currentTimeMillis() + Long.parseLong(p[6]) * 1000L;
             Invite inv = new Invite(uuid(p[1]), uuid(p[2]), p[3], expires, p[7].charAt(0), p[8]);
+            if (pm.hasInvite(targetId, inv.partyId) || pm.isResolved(inv.partyId, target.getName())) return;
             pm.addInvite(targetId, inv);
             plugin.notifyInvite(target, inv);
 
         } else if (Net.INVITE_DENY.equals(type) && p.length >= 3) {
+            pm.cancelInvite(uuid(p[1]), p[2]);
             Player leader = Bukkit.getPlayer(uuid(p[1]));
             if (leader != null) m.send(leader, "invite-denied-to-leader", "player", p[2]);
 
         } else if (Net.INVITE_FAIL.equals(type) && p.length >= 3) {
+            pm.cancelInvite(uuid(p[1]), p[2]);
             Player leader = Bukkit.getPlayer(uuid(p[1]));
             if (leader != null) m.send(leader, "player-offline");
 
         } else if (Net.INVITE_BUSY.equals(type) && p.length >= 3) {
+            pm.cancelInvite(uuid(p[1]), p[2]);
             Player leader = Bukkit.getPlayer(uuid(p[1]));
             if (leader != null) m.send(leader, "player-already-in-party");
         }

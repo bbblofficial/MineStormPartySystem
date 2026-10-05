@@ -5,3 +5,4 @@ target/
 *.db
 *.log
 dependency-reduced-pom.xml
+.fixer_backup/

@@ -92,6 +92,7 @@ public class PartyCommand implements CommandExecutor, TabCompleter {
 
     private void create(Player p) {
         if (!p.hasPermission("minestormparty.create")) { msg().send(p, "no-permission"); return; }
+        pm().syncNow(); // MSP-FIXER v2
         if (pm().getParty(p.getUniqueId()) != null) { msg().send(p, "already-in-party"); return; }
         pm().create(p);
         msg().send(p, "party-created");
@@ -101,6 +102,7 @@ public class PartyCommand implements CommandExecutor, TabCompleter {
         Messages m = msg();
         if (a.length < 2) { m.send(p, "invalid-usage", "usage", "/party invite <player>"); return; }
 
+        pm().syncNow(); // MSP-FIXER v2: look at the shared database, not a stale cache
         Party party = pm().getParty(p.getUniqueId());
         if (party != null && !party.isLeader(p.getUniqueId())) { m.send(p, "only-leader"); return; }
         if (party == null) {
@@ -117,8 +119,10 @@ public class PartyCommand implements CommandExecutor, TabCompleter {
         boolean remote = false;
         if (target != null) {
             if (pm().getParty(target.getUniqueId()) != null) { m.send(p, "player-already-in-party"); return; }
-        } else if (plugin.getProxyBridge().isEnabled()) {
-            remote = true; // the proxy resolves the name; failures come back as a message
+        } else if (plugin.getProxyBridge().isEnabled() || pm().isShared()) {
+            // the proxy resolves the name; with a shared database the invite is also stored there
+            if (pm().isNameInParty(name)) { m.send(p, "player-already-in-party"); return; }
+            remote = true;
         } else {
             m.send(p, "player-offline"); return;
         }
@@ -133,6 +137,7 @@ public class PartyCommand implements CommandExecutor, TabCompleter {
 
         pm().markSent(party.getId(), name, ttlMs());
         if (remote) {
+            pm().persistInvite(party, name, ttlMs());
             plugin.getProxyBridge().sendInviteRequest(party, name, ttlMs() / 1000L);
             m.send(p, "invite-sent", "target", name);
         } else {
@@ -147,20 +152,29 @@ public class PartyCommand implements CommandExecutor, TabCompleter {
     private void accept(Player p, String[] a) {
         Messages m = msg();
         if (a.length < 2) { m.send(p, "invalid-usage", "usage", "/party accept <leader>"); return; }
+        pm().syncNow(); // MSP-FIXER v2
         if (pm().getParty(p.getUniqueId()) != null) { m.send(p, "already-in-party"); return; }
 
         Invite inv = pm().findInvite(p.getUniqueId(), a[1]);
         if (inv == null) { m.send(p, "invite-none"); return; }
 
         Party party = pm().get(inv.partyId);
-        if (party == null) party = pm().restoreFromInvite(inv);
+        if (party == null) {
+            if (pm().isShared()) {
+                // the party no longer exists in the shared database
+                pm().removeInvite(p.getUniqueId(), inv.partyId);
+                m.send(p, "party-not-found");
+                return;
+            }
+            party = pm().restoreFromInvite(inv);
+        }
         if (party.size() >= maxSize()) {
             pm().removeInvite(p.getUniqueId(), inv.partyId);
             m.send(p, "party-full", "max", maxSize());
             return;
         }
 
-        pm().clearInvites(p.getUniqueId());
+        pm().consumeInvites(p.getUniqueId(), p.getName());
         pm().addMember(party, p.getUniqueId(), p.getName());
         m.send(p, "invite-accepted-self", "leader", party.getLeaderName());
         plugin.broadcastExcept(party, m.format("invite-accepted", "player", p.getName()), p.getUniqueId());

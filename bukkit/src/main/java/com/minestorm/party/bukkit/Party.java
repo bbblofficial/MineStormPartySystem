@@ -7,7 +7,12 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
-/** A party is identified by its own random id; the leader is just an attribute. */
+/**
+ * A party is identified by its own random id; the leader is just an attribute.
+ *
+ * MSP-FIXER v2: methods are synchronized because parties are read from other
+ * threads too (PlaceholderAPI / async plugins) while the main thread mutates them.
+ */
 public class Party {
 
     private final UUID id;
@@ -26,53 +31,77 @@ public class Party {
     }
 
     public UUID getId() { return id; }
-    public UUID getLeader() { return leader; }
-    public String getLeaderName() { return leaderName; }
-    public boolean isLeader(UUID u) { return leader.equals(u); }
+    public synchronized UUID getLeader() { return leader; }
+    public synchronized String getLeaderName() { return leaderName; }
+    public synchronized boolean isLeader(UUID u) { return leader.equals(u); }
     public long getCreated() { return created; }
-    public char getColor() { return color; }
-    public void setColor(char c) { this.color = Character.toLowerCase(c); }
+    public synchronized char getColor() { return color; }
+    public synchronized void setColor(char c) { this.color = Character.toLowerCase(c); }
 
-    public void setLeader(UUID u, String name) {
+    public synchronized void setLeader(UUID u, String name) {
         this.leader = u;
         this.leaderName = name;
         this.members.put(u, name);
     }
 
     /** Snapshot copy - safe to iterate while the party is modified. */
-    public Set<UUID> getMembers() {
+    public synchronized Set<UUID> getMembers() {
         return Collections.unmodifiableSet(new LinkedHashSet<UUID>(members.keySet()));
     }
 
-    public int size() { return members.size(); }
-    public boolean isMember(UUID u) { return members.containsKey(u); }
+    public synchronized int size() { return members.size(); }
+    public synchronized boolean isMember(UUID u) { return members.containsKey(u); }
 
-    public void addMember(UUID u, String name) { members.put(u, name); }
+    public synchronized void addMember(UUID u, String name) { members.put(u, name); }
 
-    public void removeMember(UUID u) {
+    public synchronized void removeMember(UUID u) {
         if (!u.equals(leader)) members.remove(u);
     }
 
-    public String getMemberName(UUID u) {
+    /** Removes a member even if it is the leader (used when storage says the leader belongs elsewhere). */
+    public synchronized void forceRemove(UUID u) { members.remove(u); }
+
+    public synchronized String getMemberName(UUID u) {
         String n = members.get(u);
         return n == null ? u.toString().substring(0, 8) : n;
     }
 
-    public void setMemberName(UUID u, String n) {
+    public synchronized void setMemberName(UUID u, String n) {
         if (!members.containsKey(u)) return;
         members.put(u, n);
         if (u.equals(leader)) leaderName = n;
     }
 
-    public UUID findMember(String name) {
+    public synchronized UUID findMember(String name) {
         for (Map.Entry<UUID, String> e : members.entrySet()) {
             if (e.getValue().equalsIgnoreCase(name)) return e.getKey();
         }
         return null;
     }
 
+    /** Copies leader / color / members from another snapshot of the same party. */
+    public void syncFrom(Party other) {
+        UUID l;
+        String ln;
+        char c;
+        Map<UUID, String> copy;
+        synchronized (other) {
+            l = other.leader;
+            ln = other.leaderName;
+            c = other.color;
+            copy = new LinkedHashMap<UUID, String>(other.members);
+        }
+        synchronized (this) {
+            this.leader = l;
+            this.leaderName = ln;
+            this.color = c;
+            this.members.clear();
+            this.members.putAll(copy);
+        }
+    }
+
     /** uuid:name,uuid:name,... (minecraft names never contain ':' or ','). */
-    public String membersCsv() {
+    public synchronized String membersCsv() {
         StringBuilder sb = new StringBuilder();
         for (Map.Entry<UUID, String> e : members.entrySet()) {
             if (sb.length() > 0) sb.append(',');

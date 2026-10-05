@@ -22,6 +22,8 @@
 
 ### Cross-server notes
 - Plugin messages need at least one player online on the sending server.
+- With MySQL, pending invites are also stored in the `msp_invites` table and delivered by a
+  poller, so invites reach players on other servers even when the proxy relay can't carry them.
 - If a backend was offline while changes happened, run `/mspa sync` on a server that
   has the correct data to re-broadcast every party.
 

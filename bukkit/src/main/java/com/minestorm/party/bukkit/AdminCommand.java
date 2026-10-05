@@ -54,11 +54,12 @@ public class AdminCommand implements CommandExecutor, TabCompleter {
         }
         if (sub.equals("sync")) {
             if (!has(s, "minestormparty.admin.sync")) { m.send(s, "no-permission"); return true; }
+            plugin.getPartyManager().syncNow(); // MSP-FIXER v2
             m.send(s, "admin-synced", "count", plugin.getProxyBridge().syncAll());
             return true;
         }
-        if (sub.equals("party")) return partySub(s, args);
-        if (sub.equals("player")) return playerSub(s, args);
+        if (sub.equals("party")) { plugin.getPartyManager().syncNow(); return partySub(s, args); }
+        if (sub.equals("player")) { plugin.getPartyManager().syncNow(); return playerSub(s, args); }
 
         m.send(s, "unknown-command");
         return true;
